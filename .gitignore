@@ -1,0 +1,15 @@
+# Platform-specific files
+.DS_Store
+Thumbs.db
+
+# Editor-specific files
+*~
+*.swp
+
+# User files
+.lspconfig
+stdout
+
+# Development artifacts
+bin/
+nim.cfg
