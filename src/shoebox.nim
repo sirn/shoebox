@@ -1,48 +1,46 @@
 import os
+
 import shoebox/gpio
+import shoebox/spidev
 
 
 const
-  BTN1_PIN = 5
-  BTN2_PIN = 6
-  BTN3_PIN = 13
-  BTN4_PIN = 19
+  BtnPin1 = 5
+  BtnPin2 = 6
+  BtnPin3 = 13
+  BtnPin4 = 19
 
 const
-  RST_PIN = 17
-  DC_PIN = 25
-  CS_PIN = 8
-  BUSY_PIN = 24
+  RstPin = 17
+  DcPin = 25
+  CsPin = 8
+  BusyPin = 24
 
 
 proc main() =
-  if setup() != SETUP_OK:
-    echo "uhh? not root?"
-    quit(1)
+  var gpio = newGPIO()
+  defer: gpio.close()
 
-  defer:
-    cleanup()
+  gpio.setup(BtnPin1, GPIODir.input, GPIOPull.up)
+  gpio.setup(BtnPin2, GPIODir.input, GPIOPull.up)
+  gpio.setup(BtnPin3, GPIODir.input, GPIOPull.up)
+  gpio.setup(BtnPin4, GPIODir.input, GPIOPull.up)
 
-  setup_gpio(BTN1_PIN, DIR_IN, PUD_UP)
-  setup_gpio(BTN2_PIN, DIR_IN, PUD_UP)
-  setup_gpio(BTN3_PIN, DIR_IN, PUD_UP)
-  setup_gpio(BTN4_PIN, DIR_IN, PUD_UP)
+  gpio.setup(BusyPin, GPIODir.input, GPIOPull.off)
+  gpio.setup(RstPin, GPIODir.output, GPIOPull.off)
+  gpio.setup(DcPin, GPIODir.output, GPIOPull.off)
+  gpio.setup(CsPin, GPIODir.output, GPIOPull.off)
 
-  setup_gpio(BUSY_PIN, DIR_IN, PUD_OFF)
-  setup_gpio(RST_PIN, DIR_OUT, PUD_OFF)
-  setup_gpio(DC_PIN, DIR_OUT, PUD_OFF)
-  setup_gpio(CS_PIN, DIR_OUT, PUD_OFF)
-
-  output_gpio(RST_PIN, LOW)
+  gpio.write(RstPin, GPIOValue.low)
   sleep(200)
-  output_gpio(RST_PIN, HIGH)
+  gpio.write(RstPin, GPIOValue.high)
   sleep(200)
 
   while true:
-    echo "btn1:", input_gpio(BTN1_PIN),
-     " btn2:", input_gpio(BTN2_PIN),
-     " btn3:", input_gpio(BTN3_PIN),
-     " btn4:", input_gpio(BTN4_PIN)
+    echo "btn1:", gpio.read(BtnPin1),
+     " btn2:", gpio.read(BtnPin2),
+     " btn3:", gpio.read(BtnPin3),
+     " btn4:", gpio.read(BtnPin4)
 
     sleep(100)
 
