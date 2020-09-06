@@ -7,22 +7,22 @@ import spidev
 type
   Epd2in7b* = object
     gpio*: GPIO
-    spiDev*: SpiDev
+    spiDev*: SPIDev
 
-  Pin* = enum
-    btn1 = 5,
-    btn2 = 6,
-    cs = 8,
-    btn3 = 13,
-    rst = 17,
-    btn4 = 19,
-    busy = 24,
-    dc = 25
+  EpdPin* = enum
+    epBtn1 = 5,
+    epBtn2 = 6,
+    epCs = 8,
+    epBtn3 = 13,
+    epRst = 17,
+    epBtn4 = 19,
+    epBusy = 24,
+    epDc = 25
 
 
 const
-  Epd2in7bWidth* = 176
-  Epd2in7bHeight* = 264
+  EpdWidth* = 176
+  EpdHeight* = 264
 
 
 const
@@ -120,33 +120,13 @@ const
   ]
 
 
-proc newEpd2in7b*(gpio: GPIO, spiDev: SpiDev): Epd2in7b =
-  gpio.setup(Pin.btn1.int, GPIODir.input, GPIOPull.up)
-  gpio.setup(Pin.btn2.int, GPIODir.input, GPIOPull.up)
-  gpio.setup(Pin.btn3.int, GPIODir.input, GPIOPull.up)
-  gpio.setup(Pin.btn4.int, GPIODir.input, GPIOPull.up)
-
-  gpio.setup(Pin.busy.int, GPIODir.input, GPIOPull.off)
-  gpio.setup(Pin.rst.int, GPIODir.output, GPIOPull.off)
-  gpio.setup(Pin.dc.int, GPIODir.output, GPIOPull.off)
-  gpio.setup(Pin.cs.int, GPIODir.output, GPIOPull.off)
-
-  spiDev.setMaxSpeedHz(2000000)
-  spiDev.setMode(0b00)
-
-  return Epd2in7b(
-    gpio: gpio,
-    spiDev: spiDev
-  )
-
-
 proc sendCommand(a: Epd2in7b, command: int) =
-  a.gpio.write(Pin.dc.int, GPIOValue.low)
+  a.gpio.write(EpdPin.epDc.int, GPIOVal.gvLow)
   a.spiDev.writeByte(byte(command))
 
 
 proc sendData(a: Epd2in7b, command: int) =
-  a.gpio.write(Pin.dc.int, GPIOValue.high)
+  a.gpio.write(EpdPin.epDc.int, GPIOVal.gvHigh)
   a.spiDev.writeByte(byte(command))
 
 
@@ -157,14 +137,14 @@ template sendCommandWithData(a: Epd2in7b, command: int, data: varargs[int]) =
 
 
 proc wait*(a: Epd2in7b) =
-  while a.gpio.read(Pin.busy.int) == GPIOValue.low:
+  while a.gpio.read(EpdPin.epBusy.int) == GPIOVal.gvLow:
     sleep(100)
 
 
 proc reset*(a: Epd2in7b) =
-  a.gpio.write(Pin.rst.int, GPIOValue.low)
+  a.gpio.write(EpdPin.epRst.int, GPIOVal.gvLow)
   sleep(200)
-  a.gpio.write(Pin.rst.int, GPIOValue.high)
+  a.gpio.write(EpdPin.epRst.int, GPIOVal.gvHigh)
   sleep(200)
 
 
@@ -182,8 +162,6 @@ proc deepSleep*(a: Epd2in7b) =
 
 
 proc init*(a: Epd2in7b) =
-  a.reset()
-
   # Power on
   a.sendCommand(PowerOn)
   a.wait()
@@ -209,31 +187,27 @@ proc init*(a: Epd2in7b) =
   sendCommandWithData(a, LutBlackToBlack, LutBb)
   sendCommandWithData(a, PartialDisplayRefresh, 0x00)
 
-  # TODO: Remove me all the code below
-  # Hard screen clear
-  sendCommandWithData(
-    a,
-    TconResolution,
-    Epd2in7bWidth shr 8,
-    Epd2in7bWidth and 0xff,
-    Epd2in7bHeight shr 8,
-    Epd2in7bHeight and 0xff,
+
+proc newEpd2in7b*(gpio: GPIO, spiDev: SPIDev): Epd2in7b =
+  gpio.setup(EpdPin.epBtn1.int, GPIODir.gdInput, GPIOPull.gpUp)
+  gpio.setup(EpdPin.epBtn2.int, GPIODir.gdInput, GPIOPull.gpUp)
+  gpio.setup(EpdPin.epBtn3.int, GPIODir.gdInput, GPIOPull.gpUp)
+  gpio.setup(EpdPin.epBtn4.int, GPIODir.gdInput, GPIOPull.gpUp)
+
+  gpio.setup(EpdPin.epBusy.int, GPIODir.gdInput, GPIOPull.gpOff)
+  gpio.setup(EpdPin.epRst.int, GPIODir.gdOutput, GPIOPull.gpOff)
+  gpio.setup(EpdPin.epDc.int, GPIODir.gdOutput, GPIOPull.gpOff)
+  gpio.setup(EpdPin.epCs.int, GPIODir.gdOutput, GPIOPull.gpOff)
+
+  spiDev.setMaxSpeedHz(2000000)
+  spiDev.setMode(0b00)
+
+  var epd2in7b = Epd2in7b(
+    gpio: gpio,
+    spiDev: spiDev
   )
 
-  # Black channel
-  a.sendCommand(DataStartTransmission1)
-  sleep(2)
-  for i in 0..int((Epd2in7bWidth * Epd2in7bHeight / 8)):
-    a.sendData(0xff)
-  sleep(2)
+  epd2in7b.reset()
+  epd2in7b.init()
 
-  # Red channel
-  a.sendCommand(DataStartTransmission2)
-  sleep(2)
-  for i in 0..int((Epd2in7bWidth * Epd2in7bHeight / 8)):
-    a.sendData(0x00)
-  sleep(2)
-
-  a.sendCommand(DisplayRefresh)
-  a.wait()
-  a.powerOff()
+  return epd2in7b

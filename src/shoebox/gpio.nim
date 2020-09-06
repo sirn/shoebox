@@ -29,18 +29,18 @@ type
     gpioAry: ptr UncheckedArray[uint32]
 
   GPIOPull* = enum
-    off,
-    down,
-    up
+    gpOff,
+    gpDown,
+    gpUp
 
   GPIODir* = enum
-    output = 0,
-    input = 1,
-    alt0 = 4
+    gdOutput = 0,
+    gdInput = 1,
+    gdAlt0 = 4
 
-  GPIOValue* = enum
-    low,
-    high
+  GPIOVal* = enum
+    gvLow,
+    gvHigh
 
   GPIOError* = object of IOError
 
@@ -48,6 +48,120 @@ type
 proc shortWait() =
   for i in 0..150:
     asm "nop"
+
+
+proc setPullUpdn*(a: GPIO, gpio: int, pud: GPIOPull) =
+  ## Configure the pull-up/down resistors of the given pin.
+  ##
+  ## When `pud` is set to `GPIOPull.gpUp`, the pin have `GPIOVal.gvHigh` as
+  ## its default state and changed to `GPIOVal.gvLow` when the action is
+  ## performed (e.g. pressing a button). Setting `pud` to `GPIOPull.gpDown`
+  ## will have the opposite behavior.
+  if a.gpioAry[PullUpdnOffset27113] != 0x6770696f:
+    var pullReg: uint32 = PullUpdnOffset27110 + uint32(gpio shr 4)
+    var pullShift: uint32 = uint32(gpio and 0xf) shl 1'u32
+    var tmp: uint32 = a.gpioAry[pullReg]
+    var pull: uint32 = 0
+
+    case pud:
+      of GPIOPull.gpUp:
+        pull = 1
+      of GPIOPull.gpDown:
+        pull = 2
+      else:
+        pull = 0
+
+    tmp = tmp and not (3'u32 shl pullShift)
+    tmp = tmp or (pull shl pullShift)
+    a.gpioAry[pullReg] = tmp
+
+  # Raspberry Pi 3 or lower
+  else:
+    var clkOffset: uint32 = PullUpdnClkOffset + uint32(gpio div 32)
+    var shift: uint32 = uint32(gpio mod 32)
+    var tmp: uint32 = a.gpioAry[PullUpdnOffset]
+
+    case pud:
+      of GPIOPull.gpUp:
+        tmp = (tmp and not 3'u32) or GPIOPull.gpUp.uint32
+      of GPIOPull.gpDown:
+        tmp = (tmp and not 3'u32) or GPIOPull.gpDown.uint32
+      else:
+        tmp = tmp and not 3'u32
+
+    a.gpioAry[PullUpdnOffset] = tmp
+    shortWait()
+    a.gpioAry[clkOffset] = uint32(1 shl shift)
+    shortWait()
+
+    a.gpioAry[PullUpdnOffset] = a.gpioAry[PullUpdnOffset] and not 3'u32
+    a.gpioAry[clkOffset] = 0
+
+
+proc setDirection*(a: GPIO, gpio: int, direction: GPIODir) =
+  ## Set the direction of the GPIO pin. This can be either `GPIODir.gdInput`
+  ## for reading the value of the pin (e.g. button press) or `GPIODir.gdOutput`
+  ## for writing to a pin (e.g. manipulating a hardware)
+  var offset: uint32 = FSelOffset + uint32(gpio div 10)
+  var shift: uint32 = uint32(gpio mod 10) * 3'u32
+  var tmp: uint32 = a.gpioAry[offset]
+
+  case direction:
+    of GPIODir.gdOutput:
+      tmp = tmp and not uint32(7 shl shift)
+      tmp = tmp or uint32(1 shl shift)
+    else:
+      tmp = tmp and not uint32(7 shl shift)
+
+  a.gpioAry[offset] = tmp
+
+
+proc getDirection*(a: GPIO, gpio: int): GPIODir =
+  ## Returns the current direction of the given GPIO pin.
+  var offset: uint32 = FSelOffset + uint32(gpio div 10)
+  var shift: uint32 = uint32(gpio mod 10) * 3'u32
+  var tmp: uint32 = a.gpioAry[offset]
+
+  tmp = tmp and uint32(7 shl shift)
+  tmp = tmp shr shift
+  return GPIODir(tmp)
+
+
+proc setup*(a: GPIO, gpio: int, direction: GPIODir, pud: GPIOPull) =
+  ## Performs setting up both pull-up/down register and direction
+  ## of a GPIO pin.
+  a.setPullUpdn(gpio, pud)
+  a.setDirection(gpio, direction)
+
+
+proc write*(a: GPIO, gpio: int, value: GPIOVal) =
+  ## Writes to GPIO pin. Note this function requires the given
+  ## GPIO pin to be set to `DIR_OUT`.
+  var offset: uint32
+  var shift: uint32 = uint32(gpio mod 32)
+
+  case value:
+    of GPIOVal.gvHigh:
+      offset = SetOffset + uint32(gpio div 32)
+    else:
+      offset = ClrOffset + uint32(gpio div 32)
+
+  a.gpioAry[offset] = 1'u32 shl shift
+
+
+proc read*(a: GPIO, gpio: int): GPIOVal =
+  ## Read the value of GPIO pin.
+  var offset: uint32 = PinlevelOffset + uint32(gpio div 32)
+  var mask: uint32 = 1'u32 shl uint32(gpio mod 32)
+  if (a.gpioAry[offset] and mask) == 0:
+    return GPIOVal.gvLow
+  return GPIOVal.gvHigh
+
+
+proc close*(a: GPIO) =
+  ## Free the memory allocated to communicate with the GPIO
+  ## register. This function should be called on exit.
+  discard posix.munmap(a.gpioMap, BlockSize)
 
 
 proc newGPIO*(): GPIO =
@@ -147,117 +261,3 @@ proc newGPIO*(): GPIO =
     gpioMap: gpioMap,
     gpioAry: gpioAry
   )
-
-
-proc set_pullupdn*(a: GPIO, gpio: int, pud: GPIOPull) =
-  ## Configure the pull-up/down resistors of the given pin.
-  ##
-  ## When `pud` is set to `GPIOPull.up`, the pin have `GPIOValue.value` as
-  ## its default state and changed to `GPIOValue.low` when the action is
-  ## performed (e.g. pressing a button). Setting `pud` to `GPIOPull.down`
-  ## will have the opposite behavior.
-  if a.gpioAry[PullUpdnOffset27113] != 0x6770696f:
-    var pullReg: uint32 = PullUpdnOffset27110 + uint32(gpio shr 4)
-    var pullShift: uint32 = uint32(gpio and 0xf) shl 1'u32
-    var tmp: uint32 = a.gpioAry[pullReg]
-    var pull: uint32 = 0
-
-    case pud:
-      of GPIOPull.up:
-        pull = 1
-      of GPIOPull.down:
-        pull = 2
-      else:
-        pull = 0
-
-    tmp = tmp and not (3'u32 shl pullShift)
-    tmp = tmp or (pull shl pullShift)
-    a.gpioAry[pullReg] = tmp
-
-  # Raspberry Pi 3 or lower
-  else:
-    var clkOffset: uint32 = PullUpdnClkOffset + uint32(gpio div 32)
-    var shift: uint32 = uint32(gpio mod 32)
-    var tmp: uint32 = a.gpioAry[PullUpdnOffset]
-
-    case pud:
-      of GPIOPull.up:
-        tmp = (tmp and not 3'u32) or GPIOPull.up.uint32
-      of GPIOPull.down:
-        tmp = (tmp and not 3'u32) or GPIOPull.down.uint32
-      else:
-        tmp = tmp and not 3'u32
-
-    a.gpioAry[PullUpdnOffset] = tmp
-    shortWait()
-    a.gpioAry[clkOffset] = uint32(1 shl shift)
-    shortWait()
-
-    a.gpioAry[PullUpdnOffset] = a.gpioAry[PullUpdnOffset] and not 3'u32
-    a.gpioAry[clkOffset] = 0
-
-
-proc setDirection*(a: GPIO, gpio: int, direction: GPIODir) =
-  ## Set the direction of the GPIO pin. This can be either `GPIODir.input`
-  ## for reading the value of the pin (e.g. button press) or `GPIODir.output`
-  ## for writing to a pin (e.g. manipulating a hardware)
-  var offset: uint32 = FSelOffset + uint32(gpio div 10)
-  var shift: uint32 = uint32(gpio mod 10) * 3'u32
-  var tmp: uint32 = a.gpioAry[offset]
-
-  case direction:
-    of GPIODir.output:
-      tmp = tmp and not uint32(7 shl shift)
-      tmp = tmp or uint32(1 shl shift)
-    else:
-      tmp = tmp and not uint32(7 shl shift)
-
-  a.gpioAry[offset] = tmp
-
-
-proc getDirection*(a: GPIO, gpio: int): GPIODir =
-  ## Returns the current direction of the given GPIO pin.
-  var offset: uint32 = FSelOffset + uint32(gpio div 10)
-  var shift: uint32 = uint32(gpio mod 10) * 3'u32
-  var tmp: uint32 = a.gpioAry[offset]
-
-  tmp = tmp and uint32(7 shl shift)
-  tmp = tmp shr shift
-  return GPIODir(tmp)
-
-
-proc setup*(a: GPIO, gpio: int, direction: GPIODir, pud: GPIOPull) =
-  ## Performs setting up both pull-up/down register and direction
-  ## of a GPIO pin.
-  a.setPullUpdn(gpio, pud)
-  a.setDirection(gpio, direction)
-
-
-proc write*(a: GPIO, gpio: int, value: GPIOValue) =
-  ## Writes to GPIO pin. Note this function requires the given
-  ## GPIO pin to be set to `DIR_OUT`.
-  var offset: uint32
-  var shift: uint32 = uint32(gpio mod 32)
-
-  case value:
-    of GPIOValue.high:
-      offset = SetOffset + uint32(gpio div 32)
-    else:
-      offset = ClrOffset + uint32(gpio div 32)
-
-  a.gpioAry[offset] = 1'u32 shl shift
-
-
-proc read*(a: GPIO, gpio: int): GPIOValue =
-  ## Read the value of GPIO pin.
-  var offset: uint32 = PinlevelOffset + uint32(gpio div 32)
-  var mask: uint32 = 1'u32 shl uint32(gpio mod 32)
-  if (a.gpioAry[offset] and mask) == 0:
-    return GPIOValue.low
-  return GPIOValue.high
-
-
-proc close*(a: GPIO) =
-  ## Free the memory allocated to communicate with the GPIO
-  ## register. This function should be called on exit.
-  discard posix.munmap(a.gpioMap, BlockSize)
