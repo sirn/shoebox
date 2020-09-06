@@ -3,7 +3,7 @@
 version       = "0.1.0"
 author        = "Kridsada Thanabulpong"
 description   = "Personal dashboard"
-license       = "Proprietary"
+license       = "BSD-3-Clause"
 srcDir        = "src"
 bin           = @["shoebox"]
 
