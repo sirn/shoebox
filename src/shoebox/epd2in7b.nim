@@ -1,5 +1,6 @@
 import os
 import algorithm
+import strformat
 
 import gpio
 import spidev
@@ -34,7 +35,7 @@ const
 
 
 type
-  EpdFb* = array[EpdMaxSize, uint8]
+  EpdFb* = openarray[uint8]
 
 
 const
@@ -150,47 +151,84 @@ template sendCmdData(a: Epd2in7b, command: uint8, data: varargs[uint8]) =
 
 
 proc wait*(a: Epd2in7b) =
+  ## Wait until chipset becomes ready.
   while a.gpio.read(EpdPin.epBusy.int) == GPIOVal.gvLow:
     sleep(100)
 
 
 proc powerOff*(a: Epd2in7b) =
-  a.sendCmd(PowerOff)
-
-
-proc deepSleep*(a: Epd2in7b) =
-  a.sendCmd(DeepSleep)
-  a.sendData(0xa5)
-
-
-proc displayRefresh*(a: Epd2in7b) =
-  a.sendCmd(DisplayRefresh)
+  ## Turn off the chipset.
+  sendCmdData(a, PowerOff)
+  sendCmdData(a, PowerOffSequenceSetting, 0x00)
   a.wait()
 
 
-proc convertFb*(a: Epd2in7b, sSeq: openArray[uint8], sWidth: int, sHeight: int, color: EpdColor): EpdFb =
-  ## Convert a sequence of uint8 into an EPD framebuffer.
-  var fb {.noinit.}: EpdFb
+proc deepSleep*(a: Epd2in7b) =
+  ## Put the chipset in deep sleep mode to save power.
+  sendCmdData(a, DeepSleep, 0xa5)
+
+
+proc displayRefresh*(a: Epd2in7b) =
+  ## Perform a full display refresh.
+  sendCmdData(a, DisplayRefresh)
+  a.wait()
+
+
+proc displayRefreshPartial*(a: Epd2in7b, x: int, y: int, width: int, height: int) =
+  ## Perform a partial display refresh originating at `(x, y)` coordinates for
+  ## the given `width` and `height`. `x` coordinate and `width` must be
+  ## dividable by 8 (but not `y` and `height`).
+  sendCmdData(
+    a,
+    PartialDisplayRefresh,
+    0x00 and uint8(x shr 8), # DFV_EN & WIDTH
+    uint8(x and 0xF8),
+    uint8(y shr 8),
+    uint8(y and 0xFF),
+    uint8(width shr 8),
+    uint8(width and 0xF8),
+    uint8(height shr 8),
+    uint8(height and 0xFF)
+  )
+  a.wait()
+
+
+proc convertFb*(
+  a: Epd2in7b,
+  sSeq: openArray[uint8],
+  width: int,
+  height: int,
+  color: EpdColor
+): seq[uint8] =
+  ## Convert a sequence of uint8 into an EPD framebuffer. When converting
+  ## for a full render (via `renderFb`), `width` and `height` must be set
+  ## to that of EPD's, not the source image.
+  var fb {.noinit.}: seq[uint8]
+  var fbSize = int(width * height / 8)
+
+  fb.setLen(fbSize)
 
   case color:
     of ecBlack:
       # Black fills 0xff (0) -> 0x00 (1)
       fb.fill(0xff)
 
-      for y in 0..(sHeight - 1):
-        for x in 0..(sWidth - 1):
-          if sSeq[x + y * sWidth] != 0:
-            var pos = int((x + y * EpdWidth) / 8)
+      for y in 0..(height - 1):
+        for x in 0..(width - 1):
+          var cd = x + y * width
+          if len(sSeq) > cd and sSeq[cd] != 0:
+            var pos = int((x + y * width) / 8)
             fb[pos] = fb[pos] and not uint8(0x80 shr (x mod 8))
 
     of ecRed:
       # Red fills 0x00 (0) -> 0xff (1) (yes this is annoying)
       fb.fill(0x00)
 
-      for y in 0..(sHeight - 1):
-        for x in 0..(sWidth - 1):
-          if sSeq[x + y * sWidth] != 0:
-            var pos = int((x + y * EpdWidth) / 8)
+      for y in 0..(height - 1):
+        for x in 0..(width - 1):
+          var cd = x + y * width
+          if len(sSeq) > cd and sSeq[cd] != 0:
+            var pos = int((x + y * width) / 8)
             fb[pos] = fb[pos] or uint8(0x80 shr (x mod 8))
 
   return fb
@@ -209,16 +247,53 @@ proc renderFb*(a: Epd2in7b, fb: EpdFb, color: EpdColor) =
   case color:
     of ecBlack:
       a.sendCmd(DataStartTransmission1)
-      sleep(2)
-      for i in 0..(EpdMaxSize - 1):
-        a.sendData(fb[i])
-      sleep(2)
     of ecRed:
       a.sendCmd(DataStartTransmission2)
-      sleep(2)
-      for i in 0..(EpdMaxSize - 1):
-        a.sendData(fb[i] and 0xff)
-      sleep(2)
+  sleep(2)
+  for i in 0..(len(fb) - 1):
+    a.sendData(fb[i] and 0xff)
+  sleep(2)
+
+
+proc renderFbPartial*(
+  a: Epd2in7b,
+  fb: EpdFb,
+  x: int,
+  y: int,
+  width: int,
+  height: int,
+  color: EpdColor
+) =
+  ## Similar to `renderFb` but only sends partial data originating at
+  ## `(x, y)` coordinates for the given `width` and `height`. `x` coordinate
+  ## and `width` must be dividable by 8 (but not `y` and `height`).
+  if width mod 8 != 0:
+    raise newException(
+      EpdError,
+      fmt"got {width} for width, but must be dividable by 8"
+    )
+  if x mod 8 != 0:
+    raise newException(
+      EpdError,
+      fmt"got {x} for x, but must be dividable by 8"
+    )
+  case color:
+    of ecBlack:
+      a.sendCmd(PartialDataStartTransmission1)
+    of ecRed:
+      a.sendCmd(PartialDataStartTransmission2)
+  a.sendData(uint8(x shr 8))
+  a.sendData(uint8(x and 0xF8))
+  a.sendData(uint8(y shr 8))
+  a.sendData(uint8(y and 0xFF))
+  a.sendData(uint8(width shr 8))
+  a.sendData(uint8(width and 0xF8))
+  a.sendData(uint8(height shr 8))
+  a.sendData(uint8(height and 0xFF))
+  sleep(2)
+  for i in 0..(len(fb) - 1):
+    a.sendData(fb[i] and 0xff)
+  sleep(2)
 
 
 proc setup*(a: Epd2in7b) =

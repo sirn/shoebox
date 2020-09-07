@@ -11,6 +11,7 @@ bin/shoebox_$(ARCH)_$(OS)_$(LIBC): $(SRC_FILES)
 	nimble c \
 		--define:$(LIBC) \
 		--define:release \
+		--passL:-static \
 		--cpu:$(ARCH) \
 		--opt:size \
 		--out:$@ \
@@ -19,6 +20,7 @@ bin/shoebox_$(ARCH)_$(OS)_$(LIBC): $(SRC_FILES)
 
 clean:
 	find bin/ -type f -print -delete
+
 
 .PHONY: clean
 $(VERBOSE).SILENT:

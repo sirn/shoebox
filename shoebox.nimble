@@ -12,3 +12,4 @@ bin           = @["shoebox"]
 # Dependencies
 
 requires "nim >= 1.2.0"
+requires "stb_image >= 2.5"
